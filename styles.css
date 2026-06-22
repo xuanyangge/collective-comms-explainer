@@ -259,6 +259,21 @@ html, body {
   box-shadow: 0 6px 16px rgba(20, 25, 40, 0.18);
 }
 
+.op-note {
+  max-width: 680px;
+  margin: 16px auto 0;
+  padding: 10px 14px;
+  background: var(--accent-soft);
+  border: 1px solid #dfe3f5;
+  border-radius: 10px;
+  color: #3a3f52;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+.op-note strong { color: var(--accent); }
+.op-note:empty { display: none; }
+
 .hint { color: var(--muted); font-size: 13px; margin-top: 16px; text-align: center; }
 
 /* ---- Inspector ---- */

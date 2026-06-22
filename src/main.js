@@ -29,6 +29,12 @@ window.CC = window.CC || {};
     model = currentBuilder()(N);
     CC.Render.build(els, model, openInspector);
     $("current-op").textContent = "Ring " + model.name;
+    $("op-note").innerHTML =
+      model.key === "reduce-scatter"
+        ? "Each message still carries a <strong>full chunk</strong> — the entire a×b submatrix. " +
+          "The fill bar and <strong>k/N</strong> badge show <strong>reduction progress</strong> " +
+          "(how many GPUs' contributions are summed in), not a partial amount of data in flight."
+        : "Each message carries one <strong>full chunk</strong>; a slot is either a complete copy or empty.";
 
     const stepSlider = $("step");
     stepSlider.max = String(model.steps.length - 1);
@@ -172,7 +178,8 @@ window.CC = window.CC || {};
         $("inspect-title").textContent = `GPU ${node} · Chunk C${chunk}`;
         renderMatrix(CC.reducedMatrix(chunk, ranks));
         $("inspect-note").textContent =
-          `${ranks.length}/${N} reduced — sum of contributions from GPU ${ranks.join(", ")}. ` +
+          `Full ${CC.rows}×${CC.cols} submatrix · ${ranks.length}/${N} reduced — ` +
+          `element-wise Σ of contributions from GPU ${ranks.join(", ")}. ` +
           (ranks.length === N
             ? `Fully reduced ✓ — GPU ${chunk} owns this shard.`
             : `Partial sum (still accumulating).`);

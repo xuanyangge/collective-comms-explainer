@@ -15,14 +15,20 @@ window.CC = window.CC || {};
   let step = 0;
   let playing = false;
   let playTimer = null;
-  let inspectMode = null; // { type:'chunk', chunk } | { type:'full' } | null
+  let inspectMode = null; // { type:'cell', node, chunk } | { type:'full' } | null
+
+  function currentBuilder() {
+    const c = CC.collectives[$("collective").value];
+    return c && c.ready && c.build ? c.build : CC.allGather;
+  }
 
   function rebuild() {
     const N = parseInt($("node-count").value, 10);
     $("node-count-val").textContent = N;
 
-    model = CC.allGather(N);
-    CC.Render.build(els, model, (chunk) => openInspector(chunk));
+    model = currentBuilder()(N);
+    CC.Render.build(els, model, openInspector);
+    $("current-op").textContent = "Ring " + model.name;
 
     const stepSlider = $("step");
     stepSlider.max = String(model.steps.length - 1);
@@ -31,11 +37,13 @@ window.CC = window.CC || {};
     updateStepLabel();
     updateCostModel();
     CC.Render.renderStep(0, false);
-    // a full-tensor view stays valid across N changes; a chunk view may not
-    if (inspectMode && inspectMode.type === "chunk" && inspectMode.chunk >= N) {
-      closeInspector();
-    } else if (inspectMode) {
-      renderInspector();
+
+    if (inspectMode) {
+      if (inspectMode.type === "cell" && (inspectMode.node >= N || inspectMode.chunk >= N)) {
+        closeInspector();
+      } else {
+        renderInspector();
+      }
     }
   }
 
@@ -50,6 +58,7 @@ window.CC = window.CC || {};
     step = clamped;
     updateStepLabel();
     CC.Render.renderStep(step, animate);
+    if (inspectMode && inspectMode.type === "cell") renderInspector();
   }
 
   function play() {
@@ -75,7 +84,7 @@ window.CC = window.CC || {};
     if (playTimer) clearTimeout(playTimer);
   }
 
-  // ---- Cost model (ring all-gather) ----
+  // ---- Cost model (ring all-gather / reduce-scatter — same communication cost) ----
   function fmtBytes(n) {
     const u = ["B", "KB", "MB", "GB", "TB"];
     let i = 0;
@@ -83,8 +92,7 @@ window.CC = window.CC || {};
       n /= 1000;
       i++;
     }
-    const v = i === 0 ? n : n.toFixed(n < 10 ? 2 : 1);
-    return v + " " + u[i];
+    return (i === 0 ? n : n.toFixed(n < 10 ? 2 : 1)) + " " + u[i];
   }
   function fmtTime(s) {
     if (s < 1e-6) return (s * 1e9).toFixed(2) + " ns";
@@ -97,11 +105,11 @@ window.CC = window.CC || {};
     const bytes = parseInt($("dtype").value, 10);
     const W = Math.max(1, parseFloat($("bw").value) || 1) * 1e9; // per-device GB/s -> bytes/s
 
-    const S = CC.rows * CC.cols * bytes; // shard bytes
-    const D = N * S; // full tensor bytes
-    const perGpu = (N - 1) * S; // each GPU sends this much
-    const total = N * (N - 1) * S; // summed across all links
-    const T = perGpu / W; // seconds (links run in parallel)
+    const S = CC.rows * CC.cols * bytes;
+    const D = N * S;
+    const perGpu = (N - 1) * S;
+    const total = N * (N - 1) * S;
+    const T = perGpu / W;
 
     $("cm-n").textContent = N;
     $("cm-s").textContent = fmtBytes(S);
@@ -109,13 +117,30 @@ window.CC = window.CC || {};
     $("cm-pergpu").textContent = fmtBytes(perGpu);
     $("cm-total").textContent = fmtBytes(total);
     $("cm-time").textContent = fmtTime(T);
+
+    $("cm-title").textContent = "Ring " + model.name + " cost";
+    if (model.cost) {
+      $("cm-first").textContent = model.cost.first;
+      $("cm-second").textContent = model.cost.second;
+    }
   }
 
   // ---- Inspector ----
-  const fmt = (v) => (v < 0 ? "" : " ") + v.toFixed(2); // align sign column
+  const fmt = (v) => (v < 0 ? "" : " ") + v.toFixed(2);
 
-  function openInspector(chunk) {
-    inspectMode = { type: "chunk", chunk };
+  function renderMatrix(m) {
+    let html = "<table class='matrix'><tbody>";
+    for (const row of m) {
+      html += "<tr>";
+      for (const v of row) html += `<td>${fmt(v)}</td>`;
+      html += "</tr>";
+    }
+    html += "</tbody></table>";
+    $("inspect-matrix").innerHTML = html;
+  }
+
+  function openInspector(node, chunk) {
+    inspectMode = { type: "cell", node, chunk };
     renderInspector();
   }
   function openFullTensor() {
@@ -126,58 +151,62 @@ window.CC = window.CC || {};
   function renderInspector() {
     if (!inspectMode) return;
     const N = model.numNodes;
+    const sw = $("inspect-swatch");
 
-    if (inspectMode.type === "chunk") {
-      const chunk = inspectMode.chunk;
+    if (inspectMode.type === "cell") {
+      const { node, chunk } = inspectMode;
+      const d = model.steps[step].cells[node][chunk];
       const color = CC.chunkColor(chunk, N);
-      const m = CC.submatrix(chunk);
-
-      $("inspect-title").textContent = "Chunk C" + chunk;
-      const sw = $("inspect-swatch");
       sw.style.background = color.bg;
       sw.style.borderColor = color.border;
 
-      let html = "<table class='matrix'><tbody>";
-      for (const row of m) {
-        html += "<tr>";
-        for (const v of row) html += `<td>${fmt(v)}</td>`;
-        html += "</tr>";
+      if (d.data.kind === "plain") {
+        $("inspect-title").textContent = "Chunk C" + chunk;
+        renderMatrix(CC.submatrix(chunk));
+        const base = chunk * CC.rows;
+        $("inspect-note").textContent =
+          `${CC.rows}×${CC.cols} shard · rows ${base}–${base + CC.rows - 1} of the ` +
+          `full ${N * CC.rows}×${CC.cols} tensor. Glorot-style weights in [-1, 1].`;
+      } else {
+        const ranks = d.data.ranks;
+        $("inspect-title").textContent = `GPU ${node} · Chunk C${chunk}`;
+        renderMatrix(CC.reducedMatrix(chunk, ranks));
+        $("inspect-note").textContent =
+          `${ranks.length}/${N} reduced — sum of contributions from GPU ${ranks.join(", ")}. ` +
+          (ranks.length === N
+            ? `Fully reduced ✓ — GPU ${chunk} owns this shard.`
+            : `Partial sum (still accumulating).`);
       }
-      html += "</tbody></table>";
-      $("inspect-matrix").innerHTML = html;
-
-      const base = chunk * CC.rows;
-      $("inspect-note").textContent =
-        `${CC.rows}×${CC.cols} shard · rows ${base}–${base + CC.rows - 1} of the ` +
-        `full ${N * CC.rows}×${CC.cols} tensor. Values: Glorot-style weights in [-1, 1].`;
     } else {
-      $("inspect-title").textContent = "Full tensor";
-      const sw = $("inspect-swatch");
+      const reduce = model.key === "reduce-scatter";
+      $("inspect-title").textContent = reduce ? "Reduced result" : "Full tensor";
       sw.style.background = "#eef1f6";
       sw.style.borderColor = "#cdd2dc";
 
-      const fm = CC.fullMatrix(N);
+      const allRanks = [];
+      for (let i = 0; i < N; i++) allRanks.push(i);
+
       let html = "<table class='matrix full'><tbody>";
-      let prevChunk = -1;
-      for (let i = 0; i < fm.length; i++) {
-        const { chunk, values } = fm[i];
+      for (let chunk = 0; chunk < N; chunk++) {
         const color = CC.chunkColor(chunk, N);
-        html += `<tr style="background:${color.bg}">`;
-        if (chunk !== prevChunk) {
-          html +=
-            `<td class="band" rowspan="${CC.rows}" ` +
-            `style="color:${color.strong};border-color:${color.border}">C${chunk}</td>`;
-          prevChunk = chunk;
+        const m = reduce ? CC.reducedMatrix(chunk, allRanks) : CC.submatrix(chunk);
+        for (let r = 0; r < CC.rows; r++) {
+          html += `<tr style="background:${color.bg}">`;
+          if (r === 0) {
+            html +=
+              `<td class="band" rowspan="${CC.rows}" ` +
+              `style="color:${color.strong};border-color:${color.border}">C${chunk}</td>`;
+          }
+          for (let c = 0; c < CC.cols; c++) html += `<td>${fmt(m[r][c])}</td>`;
+          html += "</tr>";
         }
-        for (const v of values) html += `<td>${fmt(v)}</td>`;
-        html += "</tr>";
       }
       html += "</tbody></table>";
       $("inspect-matrix").innerHTML = html;
 
-      $("inspect-note").textContent =
-        `Full tensor = ${N} chunks × ${CC.rows} rows = ${N * CC.rows}×${CC.cols}. ` +
-        `Each color band is one chunk; in all-gather every GPU ends up holding all of them.`;
+      $("inspect-note").textContent = reduce
+        ? `Fully-reduced result = Σ over all ${N} GPUs, per chunk. After reduce-scatter, GPU i keeps only its own band Ci.`
+        : `Full tensor = ${N} chunks × ${CC.rows} rows = ${N * CC.rows}×${CC.cols}. In all-gather every GPU ends up holding all of them.`;
     }
 
     $("inspector").classList.add("open");
@@ -189,6 +218,10 @@ window.CC = window.CC || {};
   }
 
   // ---- Events ----
+  $("collective").addEventListener("change", () => {
+    stop();
+    rebuild();
+  });
   $("node-count").addEventListener("input", () => {
     stop();
     rebuild();
@@ -207,12 +240,6 @@ window.CC = window.CC || {};
   });
   $("dtype").addEventListener("change", updateCostModel);
   $("bw").addEventListener("input", updateCostModel);
-  $("toggle-explain").addEventListener("click", () => {
-    const hidden = $("sidebar").classList.toggle("hidden");
-    const btn = $("toggle-explain");
-    btn.textContent = hidden ? "▸ Show cost model" : "▾ Hide cost model";
-    btn.setAttribute("aria-expanded", String(!hidden));
-  });
   $("full-tensor").addEventListener("click", openFullTensor);
   $("step").addEventListener("input", (e) => {
     stop();
@@ -228,6 +255,12 @@ window.CC = window.CC || {};
   });
   $("play").addEventListener("click", () => (playing ? stop() : play()));
   $("inspect-close").addEventListener("click", closeInspector);
+  $("toggle-explain").addEventListener("click", () => {
+    const hidden = $("sidebar").classList.toggle("hidden");
+    const btn = $("toggle-explain");
+    btn.textContent = hidden ? "▸ Show cost model" : "▾ Hide cost model";
+    btn.setAttribute("aria-expanded", String(!hidden));
+  });
 
   let resizeRAF = null;
   window.addEventListener("resize", () => {

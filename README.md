@@ -6,16 +6,18 @@ can *play with* to build intuition — tune the number of GPUs, scrub through th
 algorithm step by step, inspect the actual data each GPU holds, and see the
 data-volume / time cost model.
 
-Currently implemented: **Ring All-Gather**. The architecture is built so the
-other collectives (all-reduce, reduce-scatter, scatter, broadcast, all-to-all)
-plug into the same renderer.
+Currently implemented: **Ring All-Gather** and **Ring Reduce-Scatter** (switch
+via the Operation dropdown). The architecture is built so the other collectives
+(all-reduce, scatter, broadcast, all-to-all) plug into the same renderer.
 
 ## Features
 
 - **Tunable ring size** — 2–8 GPUs.
 - **Step scrubber + play/pause** — watch chunks propagate one neighbor per round.
 - **Tappable submatrices** — each chunk is a real `a × b` weight submatrix
-  (Glorot-style values in `[-1, 1]`); tap any block to inspect its numbers.
+  (Glorot-style values in `[-1, 1]`); tap any block to inspect its numbers. In
+  reduce-scatter, tapping shows the **running partial sum** and which GPUs'
+  contributions have been reduced in so far (a `k/N` badge per slot).
 - **Tunable chunk shape** — adjust rows `a` and cols `b` live.
 - **Full-tensor view** — assemble all chunks into the complete global tensor.
 - **Cost model panel** (collapsible, at the bottom) — live data volume and time:
@@ -52,8 +54,9 @@ To add a new collective, write a builder in `src/model.js` that returns the same
 
 ## Roadmap
 
+- [x] All-Gather
+- [x] Reduce-Scatter
 - [ ] All-Reduce (reduce-scatter + all-gather; cost `2·(N−1)/N·D`)
-- [ ] Reduce-Scatter
 - [ ] Scatter / Broadcast
 - [ ] All-to-All
 - [ ] Optional latency (α) term in the cost model

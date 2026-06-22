@@ -61,6 +61,47 @@ window.CC = window.CC || {};
     return out;
   };
 
+  // ---- Reduce-scatter inputs ----
+  // For a reduction, every GPU contributes its OWN partial value to each chunk.
+  // contribAt = GPU `rank`'s contribution to (chunk, r, c). Deterministic, keyed
+  // by all four indices so contributions differ per GPU.
+  CC.contribAt = function (rank, chunk, r, c) {
+    const key =
+      (Math.imul(rank + 1, 2654435761) ^
+        Math.imul(chunk + 1, 40503) ^
+        Math.imul(r + 1, 73856093) ^
+        Math.imul(c + 1, 19349663) ^
+        Math.imul(CC.seed, 83492791)) >>> 0;
+    const u = mulberry32(key)();
+    return u * 2 - 1; // [-1, 1]
+  };
+
+  CC.contribMatrix = function (rank, chunk) {
+    const m = [];
+    for (let r = 0; r < CC.rows; r++) {
+      const row = [];
+      for (let c = 0; c < CC.cols; c++) row.push(CC.contribAt(rank, chunk, r, c));
+      m.push(row);
+    }
+    return m;
+  };
+
+  // Element-wise sum of the given ranks' contributions to `chunk` — i.e. the
+  // (partial) reduction. ranks = full set [0..N-1] gives the final result.
+  CC.reducedMatrix = function (chunk, ranks) {
+    const m = [];
+    for (let r = 0; r < CC.rows; r++) {
+      const row = [];
+      for (let c = 0; c < CC.cols; c++) {
+        let s = 0;
+        for (const rk of ranks) s += CC.contribAt(rk, chunk, r, c);
+        row.push(s);
+      }
+      m.push(row);
+    }
+    return m;
+  };
+
   // A distinct color per chunk, evenly spread around the hue wheel.
   CC.chunkColor = function (chunk, numChunks) {
     const hue = Math.round((chunk / Math.max(numChunks, 1)) * 320);

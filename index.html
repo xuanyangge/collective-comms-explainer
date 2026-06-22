@@ -12,13 +12,13 @@
       <h1>Collective Communication, visually</h1>
       <p class="sub">
         Interactive explainer for the operations behind distributed training.
-        Currently showing <strong>Ring All-Gather</strong>.
+        Currently showing <strong id="current-op">Ring All-Gather</strong>.
       </p>
     </header>
 
     <div class="layout">
       <aside class="sidebar hidden" id="sidebar">
-        <h2 class="side-title">Ring All-Gather cost</h2>
+        <h2 class="side-title" id="cm-title">Ring All-Gather cost</h2>
 
         <div class="side-params">
           <label>dtype
@@ -41,8 +41,8 @@
 
         <h3 class="side-h">Derivation</h3>
         <ol class="derive">
-          <li>A ring all-gather runs <b>N−1</b> steps.</li>
-          <li>Each step, every GPU sends exactly one shard (<i>S</i> bytes) to its right neighbor and receives one from its left.</li>
+          <li id="cm-first">A ring all-gather runs <b>N−1</b> steps.</li>
+          <li id="cm-second">Each step, every GPU sends exactly one shard (<i>S</i> bytes) to its right neighbor and receives one from its left.</li>
           <li>So each GPU sends, over the whole op,
             <div class="formula">(N−1)·S = <span class="hl" id="cm-pergpu">—</span></div>
           </li>
@@ -74,8 +74,8 @@
         <label for="collective">Operation</label>
         <select id="collective">
           <option value="all-gather" selected>All-Gather</option>
+          <option value="reduce-scatter">Reduce-Scatter</option>
           <option value="all-reduce" disabled>All-Reduce (soon)</option>
-          <option value="reduce-scatter" disabled>Reduce-Scatter (soon)</option>
           <option value="scatter" disabled>Scatter (soon)</option>
           <option value="broadcast" disabled>Broadcast (soon)</option>
           <option value="all-to-all" disabled>All-to-All (soon)</option>

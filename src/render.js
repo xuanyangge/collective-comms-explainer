@@ -1,20 +1,13 @@
-// render.js — draws algorithm snapshots into the DOM.
-//
-// Layout: a row of node "cards" (GPUs). Each card holds N stacked cells, one per
-// chunk index. A cell is "filled" (colored) if that GPU holds the chunk, else a
-// dashed placeholder. Filled cells are tappable -> opens the inspector with the
-// chunk's submatrix. A transparent SVG overlay on top draws the transfer arrows,
-// and short-lived "flying" blocks animate data moving between cards.
+// render.js — draws collective snapshots into the DOM. Collective-agnostic:
+// it only reads the generic cell descriptors produced by model.js.
 window.CC = window.CC || {};
 (function (CC) {
   const Render = {};
 
-  let els = {};        // cached DOM references
-  let model = null;    // current collective model
-  let onInspect = null; // callback(chunk) when a cell is tapped
+  let els = {};
+  let model = null;
+  let onInspect = null; // callback(node, chunk)
 
-  // Build the node cards + cells for a fresh model. Called when N or collective
-  // changes. Returns nothing; subsequent renderStep() calls just toggle state.
   Render.build = function (refs, m, inspectCb) {
     els = refs;
     model = m;
@@ -37,20 +30,23 @@ window.CC = window.CC || {};
       const cells = document.createElement("div");
       cells.className = "node-cells";
 
-      for (let chunk = 0; chunk < N; chunk++) {
-        const color = CC.chunkColor(chunk, N);
+      for (let c = 0; c < N; c++) {
+        const color = CC.chunkColor(c, N);
         const cell = document.createElement("button");
-        cell.className = "cell empty";
+        cell.className = "cell";
         cell.type = "button";
         cell.dataset.node = String(i);
-        cell.dataset.chunk = String(chunk);
+        cell.dataset.chunk = String(c);
         cell.style.setProperty("--bg", color.bg);
         cell.style.setProperty("--border", color.border);
         cell.style.setProperty("--strong", color.strong);
-        cell.textContent = "C" + chunk;
+        cell.innerHTML =
+          '<span class="cell-fill"></span>' +
+          '<span class="cell-label">C' + c + "</span>" +
+          '<span class="cell-badge"></span>';
         cell.addEventListener("click", () => {
           if (cell.classList.contains("empty")) return; // nothing to inspect
-          if (onInspect) onInspect(chunk);
+          if (onInspect) onInspect(i, c);
         });
         cells.appendChild(cell);
       }
@@ -66,7 +62,6 @@ window.CC = window.CC || {};
     );
   }
 
-  // Rectangle of an element relative to the stage (the positioned overlay root).
   function relRect(el) {
     const a = el.getBoundingClientRect();
     const b = els.stage.getBoundingClientRect();
@@ -80,26 +75,31 @@ window.CC = window.CC || {};
     };
   }
 
-  // Render a snapshot. animate=true plays the flying blocks + arrows for the
-  // transfers that produced this step.
   Render.renderStep = function (stepIndex, animate) {
     const step = model.steps[stepIndex];
     const prev = stepIndex > 0 ? model.steps[stepIndex - 1] : null;
     const N = model.numNodes;
 
-    // Toggle every cell to match the snapshot; mark freshly-arrived ones.
     for (let i = 0; i < N; i++) {
-      for (let chunk = 0; chunk < N; chunk++) {
-        const cell = cellEl(i, chunk);
-        const has = step.held[i].has(chunk);
-        const hadBefore = prev ? prev.held[i].has(chunk) : has;
-        cell.classList.toggle("empty", !has);
-        cell.classList.toggle("filled", has);
+      for (let c = 0; c < N; c++) {
+        const d = step.cells[i][c];
+        const cell = cellEl(i, c);
+        cell.classList.toggle("empty", !d.show);
+        cell.classList.toggle("filled", d.show);
+        cell.classList.toggle("complete", !!d.complete);
+        cell.classList.toggle("dim", !!d.dim);
+        cell.querySelector(".cell-fill").style.height =
+          (d.show ? Math.round(d.fill * 100) : 0) + "%";
+        cell.querySelector(".cell-badge").textContent = d.badge || "";
+
         cell.classList.remove("just-arrived");
-        if (has && !hadBefore) {
-          // restart the pop animation
-          void cell.offsetWidth;
-          cell.classList.add("just-arrived");
+        if (prev) {
+          const p = prev.cells[i][c];
+          const grew = (d.show && !p.show) || d.fill > p.fill + 1e-9;
+          if (grew) {
+            void cell.offsetWidth; // restart the pop animation
+            cell.classList.add("just-arrived");
+          }
         }
       }
     }
@@ -115,14 +115,11 @@ window.CC = window.CC || {};
   };
 
   function clearOverlay() {
-    const svg = els.overlay;
-    // keep <defs>, drop drawn paths
-    [...svg.querySelectorAll(".arrow")].forEach((n) => n.remove());
+    [...els.overlay.querySelectorAll(".arrow")].forEach((n) => n.remove());
     [...els.stage.querySelectorAll(".fly")].forEach((n) => n.remove());
   }
 
   function drawArrows(transfers) {
-    const svg = els.overlay;
     const NS = "http://www.w3.org/2000/svg";
     for (const t of transfers) {
       const from = relRect(document.querySelector(`.node[data-node="${t.from}"]`));
@@ -134,12 +131,10 @@ window.CC = window.CC || {};
       path.setAttribute("d", `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`);
       path.setAttribute("class", "arrow");
       path.setAttribute("marker-end", "url(#arrowhead)");
-      svg.appendChild(path);
+      els.overlay.appendChild(path);
     }
   }
 
-  // Decorative motion: a colored block flies from sender's chunk cell to the
-  // receiver's chunk cell. Purely cosmetic — the snapshot is already correct.
   function flyTransfers(transfers) {
     for (const t of transfers) {
       const src = cellEl(t.from, t.chunk);
@@ -173,12 +168,10 @@ window.CC = window.CC || {};
       );
       const remove = () => fly.remove();
       anim.onfinish = remove;
-      // Fallback: ensure cleanup even if onfinish never fires.
-      setTimeout(remove, 900);
+      setTimeout(remove, 900); // fallback cleanup
     }
   }
 
-  // Reposition overlay drawings on resize (cards may reflow).
   Render.refresh = function (stepIndex) {
     Render.renderStep(stepIndex, false);
   };

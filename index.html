@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Collective Comms Explainer — All-Gather</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="masthead">
+      <h1>Collective Communication, visually</h1>
+      <p class="sub">
+        Interactive explainer for the operations behind distributed training.
+        Currently showing <strong>Ring All-Gather</strong>.
+      </p>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar hidden" id="sidebar">
+        <h2 class="side-title">Ring All-Gather cost</h2>
+
+        <div class="side-params">
+          <label>dtype
+            <select id="dtype">
+              <option value="4">fp32 · 4B</option>
+              <option value="2" selected>fp16/bf16 · 2B</option>
+              <option value="1">fp8 · 1B</option>
+            </select>
+          </label>
+          <label>Bandwidth <i>W</i> (per device)
+            <span class="inline"><input id="bw" type="number" min="1" step="1" value="100" /> GB/s</span>
+          </label>
+        </div>
+
+        <div class="side-block">
+          <div class="side-row"><span>GPUs <i>N</i></span><b id="cm-n">4</b></div>
+          <div class="side-row"><span>Shard <i>S = a·b·</i>dtype</span><b id="cm-s">—</b></div>
+          <div class="side-row"><span>Full tensor <i>D = N·S</i></span><b id="cm-d">—</b></div>
+        </div>
+
+        <h3 class="side-h">Derivation</h3>
+        <ol class="derive">
+          <li>A ring all-gather runs <b>N−1</b> steps.</li>
+          <li>Each step, every GPU sends exactly one shard (<i>S</i> bytes) to its right neighbor and receives one from its left.</li>
+          <li>So each GPU sends, over the whole op,
+            <div class="formula">(N−1)·S = <span class="hl" id="cm-pergpu">—</span></div>
+          </li>
+          <li>Rewriting with <i>S = D/N</i>:
+            <div class="formula"><sup>N−1</sup>&frasl;<sub>N</sub> · D &nbsp;→&nbsp; ≈ D as N grows</div>
+            i.e. the per-GPU volume is ~independent of N — ring all-gather is <b>bandwidth-optimal</b>.
+          </li>
+          <li>All N links run in parallel, so wall-clock time is set by the <i>per-GPU</i> volume, not the system total:</li>
+        </ol>
+
+        <div class="formula big">
+          T = <sup>(N−1)·S</sup>&frasl;<sub>W</sub> = <span class="hl" id="cm-time">—</span>
+        </div>
+
+        <div class="side-row total">
+          <span>Total moved, all links <i>N·(N−1)·S</i></span><b id="cm-total">—</b>
+        </div>
+
+        <p class="side-note">
+          The toy tensor here is tiny — the <i>formula</i> is the point. Real example:
+          <b>D</b> = 1&nbsp;GB, <b>N</b> = 8, <i>W</i> = 200&nbsp;GB/s →
+          T = <sup>7</sup>&frasl;<sub>8</sub>·1GB ÷ 200GB/s ≈ <b>4.4&nbsp;ms</b>.
+        </p>
+      </aside>
+
+      <div class="main">
+    <section class="controls">
+      <div class="control">
+        <label for="collective">Operation</label>
+        <select id="collective">
+          <option value="all-gather" selected>All-Gather</option>
+          <option value="all-reduce" disabled>All-Reduce (soon)</option>
+          <option value="reduce-scatter" disabled>Reduce-Scatter (soon)</option>
+          <option value="scatter" disabled>Scatter (soon)</option>
+          <option value="broadcast" disabled>Broadcast (soon)</option>
+          <option value="all-to-all" disabled>All-to-All (soon)</option>
+        </select>
+      </div>
+
+      <div class="control">
+        <label for="node-count">GPUs: <span id="node-count-val">4</span></label>
+        <input id="node-count" type="range" min="2" max="8" step="1" value="4" />
+      </div>
+
+      <div class="control">
+        <label for="rows">Chunk rows a: <span id="rows-val">4</span></label>
+        <input id="rows" type="range" min="1" max="6" step="1" value="4" />
+      </div>
+
+      <div class="control">
+        <label for="cols">Chunk cols b: <span id="cols-val">4</span></label>
+        <input id="cols" type="range" min="2" max="8" step="1" value="4" />
+      </div>
+
+      <div class="control buttons">
+        <button id="full-tensor" type="button">🔢 Full tensor</button>
+      </div>
+
+      <div class="control grow">
+        <label for="step">Step: <span id="step-val">0 / 3</span></label>
+        <input id="step" type="range" min="0" max="3" step="1" value="0" />
+      </div>
+
+      <div class="control buttons">
+        <button id="prev" type="button" title="Previous step">◀</button>
+        <button id="play" type="button">▶ Play</button>
+        <button id="next" type="button" title="Next step">▶</button>
+      </div>
+    </section>
+
+    <section class="stepinfo">
+      <h2 id="step-title">Step 0 · Initial</h2>
+      <p id="step-desc">Each GPU holds only its own chunk.</p>
+    </section>
+
+    <section id="stage" class="stage">
+      <div id="nodes-grid" class="nodes-grid"></div>
+      <svg id="overlay" class="overlay" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" viewBox="0 0 10 10" refX="8" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280" />
+          </marker>
+        </defs>
+      </svg>
+    </section>
+
+    <p class="hint">
+      Tip: drag the <strong>GPUs</strong> slider to change the ring size, scrub
+      <strong>Step</strong> to watch chunks propagate, and <strong>tap any filled
+      block</strong> to inspect its submatrix.
+    </p>
+      </div><!-- .main -->
+
+      <div class="page-foot">
+        <button id="toggle-explain" class="show-btn" type="button" aria-expanded="false">▸ Show cost model</button>
+      </div>
+    </div><!-- .layout -->
+  </main>
+
+  <aside id="inspector" class="inspector">
+    <div class="inspector-head">
+      <span id="inspect-swatch" class="swatch"></span>
+      <h3 id="inspect-title">Chunk C0</h3>
+      <button id="inspect-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="inspect-matrix"></div>
+    <p id="inspect-note" class="inspect-note"></p>
+  </aside>
+
+  <script src="src/data.js"></script>
+  <script src="src/model.js"></script>
+  <script src="src/render.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>

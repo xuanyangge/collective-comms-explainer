@@ -6,9 +6,10 @@ can *play with* to build intuition — tune the number of GPUs, scrub through th
 algorithm step by step, inspect the actual data each GPU holds, and see the
 data-volume / time cost model.
 
-Currently implemented: **Ring All-Gather** and **Ring Reduce-Scatter** (switch
-via the Operation dropdown). The architecture is built so the other collectives
-(all-reduce, scatter, broadcast, all-to-all) plug into the same renderer.
+Implemented operations (switch via the Operation dropdown): **All-Gather**,
+**Reduce-Scatter**, **All-Reduce** (ring), plus **Scatter**, **Broadcast**, and
+**All-to-All**. They all share one collective-agnostic renderer — each algorithm
+is just a pure state machine in `src/model.js`.
 
 ## Features
 
@@ -56,7 +57,9 @@ To add a new collective, write a builder in `src/model.js` that returns the same
 
 - [x] All-Gather
 - [x] Reduce-Scatter
-- [ ] All-Reduce (reduce-scatter + all-gather; cost `2·(N−1)/N·D`)
-- [ ] Scatter / Broadcast
-- [ ] All-to-All
+- [x] All-Reduce (reduce-scatter + all-gather; cost `2·(N−1)/N·D`)
+- [x] Scatter
+- [x] Broadcast
+- [x] All-to-All
 - [ ] Optional latency (α) term in the cost model
+- [ ] Tree / pipelined variants for broadcast & scatter

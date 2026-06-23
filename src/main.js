@@ -17,6 +17,22 @@ window.CC = window.CC || {};
   let playTimer = null;
   let inspectMode = null; // { type:'cell', node, chunk } | { type:'full' } | null
 
+  const OP_NOTES = {
+    "all-gather": "Each message carries one <strong>full chunk</strong>; a slot is either a complete copy or empty.",
+    "reduce-scatter":
+      "Each message still carries a <strong>full chunk</strong> — the entire a×b submatrix. " +
+      "The fill bar and <strong>k/N</strong> badge show <strong>reduction progress</strong> " +
+      "(how many GPUs' contributions are summed in), not a partial amount of data in flight.",
+    "all-reduce":
+      "Phase 1 reduces (the <strong>k/N</strong> badge counts contributions summed in); phase 2 shares the finished shards. " +
+      "Every message carries a full chunk.",
+    "scatter": "The root splits its tensor and sends shard i to GPU i. Each message is one <strong>full chunk</strong>.",
+    "broadcast": "The root's buffer is copied to every GPU, chunk by chunk. Each message carries a <strong>full chunk</strong>.",
+    "all-to-all":
+      "Every GPU sends a distinct block to every other GPU — a <strong>transpose</strong>. " +
+      "Labels read <strong>source→destination</strong>; color marks the source.",
+  };
+
   function currentBuilder() {
     const c = CC.collectives[$("collective").value];
     return c && c.ready && c.build ? c.build : CC.allGather;
@@ -28,13 +44,10 @@ window.CC = window.CC || {};
 
     model = currentBuilder()(N);
     CC.Render.build(els, model, openInspector);
-    $("current-op").textContent = "Ring " + model.name;
-    $("op-note").innerHTML =
-      model.key === "reduce-scatter"
-        ? "Each message still carries a <strong>full chunk</strong> — the entire a×b submatrix. " +
-          "The fill bar and <strong>k/N</strong> badge show <strong>reduction progress</strong> " +
-          "(how many GPUs' contributions are summed in), not a partial amount of data in flight."
-        : "Each message carries one <strong>full chunk</strong>; a slot is either a complete copy or empty.";
+    const ring = ["all-gather", "reduce-scatter", "all-reduce"].includes(model.key);
+    $("current-op").textContent = (ring ? "Ring " : "") + model.name;
+    $("op-note").innerHTML = OP_NOTES[model.key] || "";
+    $("full-tensor").style.display = model.key === "all-to-all" ? "none" : "";
 
     const stepSlider = $("step");
     stepSlider.max = String(model.steps.length - 1);
@@ -110,25 +123,18 @@ window.CC = window.CC || {};
     const N = model.numNodes;
     const bytes = parseInt($("dtype").value, 10);
     const W = Math.max(1, parseFloat($("bw").value) || 1) * 1e9; // per-device GB/s -> bytes/s
-
     const S = CC.rows * CC.cols * bytes;
     const D = N * S;
-    const perGpu = (N - 1) * S;
-    const total = N * (N - 1) * S;
-    const T = perGpu / W;
+    const ctx = { N, S, D, W, fmtBytes, fmtTime };
+    const cost = model.cost;
 
-    $("cm-n").textContent = N;
-    $("cm-s").textContent = fmtBytes(S);
-    $("cm-d").textContent = fmtBytes(D);
-    $("cm-pergpu").textContent = fmtBytes(perGpu);
-    $("cm-total").textContent = fmtBytes(total);
-    $("cm-time").textContent = fmtTime(T);
-
-    $("cm-title").textContent = "Ring " + model.name + " cost";
-    if (model.cost) {
-      $("cm-first").textContent = model.cost.first;
-      $("cm-second").textContent = model.cost.second;
-    }
+    $("cm-title").innerHTML = cost.title;
+    $("cm-rows").innerHTML = cost.rows
+      .map((r) => `<div class="side-row"><span>${r.label}</span><b>${r.value(ctx)}</b></div>`)
+      .join("");
+    $("cm-derive").innerHTML = cost.bullets.map((b) => `<li>${b}</li>`).join("");
+    $("cm-formula").innerHTML = typeof cost.formula === "function" ? cost.formula(ctx) : cost.formula;
+    $("cm-note").innerHTML = cost.note || "";
   }
 
   // ---- Inspector ----
@@ -162,7 +168,7 @@ window.CC = window.CC || {};
     if (inspectMode.type === "cell") {
       const { node, chunk } = inspectMode;
       const d = model.steps[step].cells[node][chunk];
-      const color = CC.chunkColor(chunk, N);
+      const color = CC.chunkColor(d.color == null ? chunk : d.color, N);
       sw.style.background = color.bg;
       sw.style.borderColor = color.border;
 
@@ -173,7 +179,7 @@ window.CC = window.CC || {};
         $("inspect-note").textContent =
           `${CC.rows}×${CC.cols} shard · rows ${base}–${base + CC.rows - 1} of the ` +
           `full ${N * CC.rows}×${CC.cols} tensor. Glorot-style weights in [-1, 1].`;
-      } else {
+      } else if (d.data.kind === "reduced") {
         const ranks = d.data.ranks;
         $("inspect-title").textContent = `GPU ${node} · Chunk C${chunk}`;
         renderMatrix(CC.reducedMatrix(chunk, ranks));
@@ -183,9 +189,16 @@ window.CC = window.CC || {};
           (ranks.length === N
             ? `Fully reduced ✓ — GPU ${chunk} owns this shard.`
             : `Partial sum (still accumulating).`);
+      } else {
+        const { src, dst } = d.data;
+        $("inspect-title").textContent = `Block ${src} → ${dst}`;
+        renderMatrix(CC.blockMatrix(src, dst));
+        $("inspect-note").textContent =
+          `Full ${CC.rows}×${CC.cols} block · data from GPU ${src} destined for GPU ${dst}. ` +
+          `On GPU ${node} (slot ${chunk}).`;
       }
     } else {
-      const reduce = model.key === "reduce-scatter";
+      const reduce = model.key === "reduce-scatter" || model.key === "all-reduce";
       $("inspect-title").textContent = reduce ? "Reduced result" : "Full tensor";
       sw.style.background = "#eef1f6";
       sw.style.borderColor = "#cdd2dc";
@@ -212,8 +225,8 @@ window.CC = window.CC || {};
       $("inspect-matrix").innerHTML = html;
 
       $("inspect-note").textContent = reduce
-        ? `Fully-reduced result = Σ over all ${N} GPUs, per chunk. After reduce-scatter, GPU i keeps only its own band Ci.`
-        : `Full tensor = ${N} chunks × ${CC.rows} rows = ${N * CC.rows}×${CC.cols}. In all-gather every GPU ends up holding all of them.`;
+        ? `Fully-reduced result = element-wise Σ over all ${N} GPUs, per chunk (${N * CC.rows}×${CC.cols}).`
+        : `Full tensor = ${N} chunks × ${CC.rows} rows = ${N * CC.rows}×${CC.cols}.`;
     }
 
     $("inspector").classList.add("open");

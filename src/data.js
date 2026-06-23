@@ -102,6 +102,29 @@ window.CC = window.CC || {};
     return m;
   };
 
+  // ---- All-to-all blocks ----
+  // Each GPU holds one distinct block per destination. blockAt = the value at
+  // (r,c) of the block sent from `src` to `dst`. Deterministic per (src,dst).
+  CC.blockAt = function (src, dst, r, c) {
+    const key =
+      (Math.imul(src + 1, 374761393) ^
+        Math.imul(dst + 1, 668265263) ^
+        Math.imul(r + 1, 73856093) ^
+        Math.imul(c + 1, 19349663) ^
+        Math.imul(CC.seed, 83492791)) >>> 0;
+    return mulberry32(key)() * 2 - 1; // [-1, 1]
+  };
+
+  CC.blockMatrix = function (src, dst) {
+    const m = [];
+    for (let r = 0; r < CC.rows; r++) {
+      const row = [];
+      for (let c = 0; c < CC.cols; c++) row.push(CC.blockAt(src, dst, r, c));
+      m.push(row);
+    }
+    return m;
+  };
+
   // A distinct color per chunk, evenly spread around the hue wheel.
   CC.chunkColor = function (chunk, numChunks) {
     const hue = Math.round((chunk / Math.max(numChunks, 1)) * 320);

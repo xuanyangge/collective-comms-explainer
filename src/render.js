@@ -91,6 +91,12 @@ window.CC = window.CC || {};
         cell.querySelector(".cell-fill").style.height =
           (d.show ? Math.round(d.fill * 100) : 0) + "%";
         cell.querySelector(".cell-badge").textContent = d.badge || "";
+        cell.querySelector(".cell-label").textContent = d.label || "C" + c;
+
+        const color = CC.chunkColor(d.color == null ? c : d.color, N);
+        cell.style.setProperty("--bg", color.bg);
+        cell.style.setProperty("--border", color.border);
+        cell.style.setProperty("--strong", color.strong);
 
         cell.classList.remove("just-arrived");
         if (prev) {
@@ -137,16 +143,19 @@ window.CC = window.CC || {};
 
   function flyTransfers(transfers) {
     for (const t of transfers) {
-      const src = cellEl(t.from, t.chunk);
-      const dst = cellEl(t.to, t.chunk);
+      const fc = t.fromChunk == null ? t.chunk : t.fromChunk;
+      const tc = t.toChunk == null ? t.chunk : t.toChunk;
+      const colorIdx = t.color == null ? fc : t.color;
+      const src = cellEl(t.from, fc);
+      const dst = cellEl(t.to, tc);
       if (!src || !dst) continue;
       const a = relRect(src);
       const b = relRect(dst);
-      const color = CC.chunkColor(t.chunk, model.numNodes);
+      const color = CC.chunkColor(colorIdx, model.numNodes);
 
       const fly = document.createElement("div");
       fly.className = "fly";
-      fly.textContent = "C" + t.chunk;
+      fly.textContent = src.querySelector(".cell-label").textContent;
       fly.style.left = a.x + "px";
       fly.style.top = a.y + "px";
       fly.style.width = a.w + "px";

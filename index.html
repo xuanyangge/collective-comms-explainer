@@ -33,39 +33,14 @@
           </label>
         </div>
 
-        <div class="side-block">
-          <div class="side-row"><span>GPUs <i>N</i></span><b id="cm-n">4</b></div>
-          <div class="side-row"><span>Shard <i>S = a·b·</i>dtype</span><b id="cm-s">—</b></div>
-          <div class="side-row"><span>Full tensor <i>D = N·S</i></span><b id="cm-d">—</b></div>
-        </div>
+        <div class="side-block" id="cm-rows"></div>
 
         <h3 class="side-h">Derivation</h3>
-        <ol class="derive">
-          <li id="cm-first">A ring all-gather runs <b>N−1</b> steps.</li>
-          <li id="cm-second">Each step, every GPU sends exactly one shard (<i>S</i> bytes) to its right neighbor and receives one from its left.</li>
-          <li>So each GPU sends, over the whole op,
-            <div class="formula">(N−1)·S = <span class="hl" id="cm-pergpu">—</span></div>
-          </li>
-          <li>Rewriting with <i>S = D/N</i>:
-            <div class="formula"><sup>N−1</sup>&frasl;<sub>N</sub> · D &nbsp;→&nbsp; ≈ D as N grows</div>
-            i.e. the per-GPU volume is ~independent of N — ring all-gather is <b>bandwidth-optimal</b>.
-          </li>
-          <li>All N links run in parallel, so wall-clock time is set by the <i>per-GPU</i> volume, not the system total:</li>
-        </ol>
+        <ol class="derive" id="cm-derive"></ol>
 
-        <div class="formula big">
-          T = <sup>(N−1)·S</sup>&frasl;<sub>W</sub> = <span class="hl" id="cm-time">—</span>
-        </div>
+        <div class="formula big" id="cm-formula"></div>
 
-        <div class="side-row total">
-          <span>Total moved, all links <i>N·(N−1)·S</i></span><b id="cm-total">—</b>
-        </div>
-
-        <p class="side-note">
-          The toy tensor here is tiny — the <i>formula</i> is the point. Real example:
-          <b>D</b> = 1&nbsp;GB, <b>N</b> = 8, <i>W</i> = 200&nbsp;GB/s →
-          T = <sup>7</sup>&frasl;<sub>8</sub>·1GB ÷ 200GB/s ≈ <b>4.4&nbsp;ms</b>.
-        </p>
+        <p class="side-note" id="cm-note"></p>
       </aside>
 
       <div class="main">
@@ -75,10 +50,10 @@
         <select id="collective">
           <option value="all-gather" selected>All-Gather</option>
           <option value="reduce-scatter">Reduce-Scatter</option>
-          <option value="all-reduce" disabled>All-Reduce (soon)</option>
-          <option value="scatter" disabled>Scatter (soon)</option>
-          <option value="broadcast" disabled>Broadcast (soon)</option>
-          <option value="all-to-all" disabled>All-to-All (soon)</option>
+          <option value="all-reduce">All-Reduce</option>
+          <option value="scatter">Scatter</option>
+          <option value="broadcast">Broadcast</option>
+          <option value="all-to-all">All-to-All</option>
         </select>
       </div>
 

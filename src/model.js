@@ -103,21 +103,22 @@ window.CC = window.CC || {};
   };
 
   const allToAllCost = {
-    title: "All-to-All cost",
+    title: "All-to-All cost (bidirectional ring)",
     rows: [
       ROW.N,
       { label: "Block <i>B = a·b·</i>dtype", value: (c) => c.fmtBytes(c.S) },
       { label: "Sent per GPU <i>(N−1)·B</i>", value: (c) => c.fmtBytes((c.N - 1) * c.S) },
-      { label: "Recv per GPU <i>(N−1)·B</i>", value: (c) => c.fmtBytes((c.N - 1) * c.S) },
-      { label: "Time <i>(N−1)B ⁄ W</i>", value: (c) => c.fmtTime(((c.N - 1) * c.S) / c.W) },
+      { label: "Steps <i>⌊N/2⌋</i>", value: (c) => Math.floor(c.N / 2) },
+      { label: "Time ≈ <i>(N−1)B ⁄ 2W</i>", value: (c) => c.fmtTime(((c.N - 1) * c.S) / (2 * c.W)) },
     ],
     bullets: [
-      "Each GPU sends a distinct block to every other GPU and receives one from each — a global transpose.",
-      "Per GPU: N−1 blocks out and N−1 in (the diagonal block i→i stays home).",
-      "With independent links all exchanges overlap, so time ≈ (N−1)·B ⁄ W.",
+      "Every GPU sends a distinct block to every other and receives one from each — a global <b>transpose</b>.",
+      "On a <b>bidirectional ring</b> (TPU-style torus link) each GPU uses two links, exchanging with partners at distance 1, then 2, … up to ⌊N/2⌋.",
+      "So it finishes in <b>⌊N/2⌋ steps</b> vs the N−1 of a one-directional ring; a full-mesh NVSwitch does it in one step but needs N× the links.",
+      "Two links share the (N−1)·B per-GPU volume, so time ≈ (N−1)·B ⁄ 2W. Ring forwarding makes large-N all-to-all costly.",
     ],
-    formula: (c) => `T ≈ <sup>(N−1)·B</sup>&frasl;<sub>W</sub> = <span class="hl">${c.fmtTime(((c.N - 1) * c.S) / c.W)}</span>`,
-    note: "All-to-all is the pattern behind tensor/sequence-parallel reshards.",
+    formula: (c) => `T ≈ <sup>(N−1)·B</sup>&frasl;<sub>2W</sub> = <span class="hl">${c.fmtTime(((c.N - 1) * c.S) / (2 * c.W))}</span>`,
+    note: "All-to-all is the pattern behind tensor/sequence-parallel reshards; on a ring its cost grows with N.",
   };
 
   // ---------- Builders ----------
@@ -302,24 +303,46 @@ window.CC = window.CC || {};
     return { name: "Broadcast", key: "broadcast", numNodes: N, steps, cost: broadcastCost };
   };
 
-  // All-to-All: GPU i holds a block for every destination (i→j); after the
-  // exchange GPU i holds the blocks sent to it (j→i). A global transpose.
+  // All-to-All on a bidirectional ring (TPU torus). GPU i starts with one block
+  // per destination, labelled letter(dst)+i — so GPU 0 holds A0,B0,C0,D0. After
+  // the transpose GPU j holds every block addressed to it: A0,A1,A2,A3 on GPU 0.
+  //
+  // Routing: a block travels the shorter way around the ring; at step k the
+  // blocks whose ring-distance is exactly k are delivered (both directions). A
+  // slot x on GPU j holds the outgoing block j→x until dist(j,x) ≤ k, then it
+  // swaps for the incoming x→j. dist is symmetric, so out leaves and in arrives
+  // in the same step — exactly one block per slot throughout. ⌊N/2⌋ steps.
   CC.allToAll = function (N) {
-    const build = (fn) => {
-      const cells = [];
-      for (let i = 0; i < N; i++) { const row = []; for (let c = 0; c < N; c++) row.push(fn(i, c)); cells.push(row); }
-      return cells;
-    };
-    const pre = (i, c) => ({ show: true, fill: 1, badge: null, complete: false, dim: false, label: `${i}→${c}`, color: i, data: { kind: "block", src: i, dst: c } });
-    const post = (i, c) => ({ show: true, fill: 1, badge: null, complete: false, dim: false, label: `${c}→${i}`, color: c, data: { kind: "block", src: c, dst: i } });
-
+    const L = CC.letter;
+    const dist = (a, b) => { const d = (((b - a) % N) + N) % N; return Math.min(d, N - d); };
+    const maxK = Math.floor(N / 2);
     const steps = [];
-    steps.push({ cells: build(pre), transfers: [], title: "Step 0 · Initial",
-      desc: `GPU i holds N blocks, one per destination (label i→j). Color marks the source.` });
-    const transfers = [];
-    for (let a = 0; a < N; a++) for (let b = 0; b < N; b++) if (a !== b) transfers.push({ from: a, to: b, fromChunk: b, toChunk: a, color: a });
-    steps.push({ cells: build(post), transfers, title: "Step 1 · All-to-All",
-      desc: `Every GPU sends block i→j to GPU j (a transpose). Now GPU i holds the blocks sent to it (label j→i).` });
+
+    const snap = (k, transfers, title, desc) => {
+      const cells = [];
+      for (let j = 0; j < N; j++) {
+        const row = [];
+        for (let x = 0; x < N; x++) {
+          const delivered = dist(j, x) <= k;
+          const src = delivered ? x : j;
+          const dst = delivered ? j : x;
+          row.push({ show: true, fill: 1, badge: null, complete: false, dim: !delivered,
+            label: `${L(dst)}${src}`, color: dst, data: { kind: "block", src, dst } });
+        }
+        cells.push(row);
+      }
+      steps.push({ cells, transfers, title, desc });
+    };
+
+    snap(0, [], "Step 0 · Initial",
+      `Each GPU holds one block per destination, labelled letter(destination)+source — so GPU 0 holds A0,B0,C0,D0. Goal: GPU j ends holding every block addressed to it (all one letter).`);
+    for (let k = 1; k <= maxK; k++) {
+      const transfers = [];
+      for (let a = 0; a < N; a++) for (let b = 0; b < N; b++) if (a !== b && dist(a, b) === k)
+        transfers.push({ from: a, to: b, fromChunk: b, toChunk: a, color: b });
+      snap(k, transfers, `Step ${k} · Exchange distance ${k}`,
+        `Bidirectional ring: every GPU swaps the blocks bound for the GPUs ${k} hop${k > 1 ? "s" : ""} away (both directions). Those blocks are now home.`);
+    }
 
     return { name: "All-to-All", key: "all-to-all", numNodes: N, steps, cost: allToAllCost };
   };

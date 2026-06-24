@@ -29,8 +29,9 @@ window.CC = window.CC || {};
     "scatter": "The root splits its tensor and sends shard i to GPU i. Each message is one <strong>full chunk</strong>.",
     "broadcast": "The root's buffer is copied to every GPU, chunk by chunk. Each message carries a <strong>full chunk</strong>.",
     "all-to-all":
-      "Every GPU sends a distinct block to every other GPU — a <strong>transpose</strong>. " +
-      "Labels read <strong>source→destination</strong>; color marks the source.",
+      "Labels read <strong>letter+number = destination+source</strong> (A=GPU0, B=GPU1, …), colored by destination. " +
+      "Each GPU starts with one block per destination and ends holding every block addressed to it (all one letter). " +
+      "Bidirectional ring: nearest partners exchange first, then distance-2, … (⌊N/2⌋ steps).",
   };
 
   function currentBuilder() {
@@ -191,11 +192,11 @@ window.CC = window.CC || {};
             : `Partial sum (still accumulating).`);
       } else {
         const { src, dst } = d.data;
-        $("inspect-title").textContent = `Block ${src} → ${dst}`;
+        $("inspect-title").textContent = `Block ${CC.letter(dst)}${src}`;
         renderMatrix(CC.blockMatrix(src, dst));
         $("inspect-note").textContent =
-          `Full ${CC.rows}×${CC.cols} block · data from GPU ${src} destined for GPU ${dst}. ` +
-          `On GPU ${node} (slot ${chunk}).`;
+          `Full ${CC.rows}×${CC.cols} block · from GPU ${src}, destined for GPU ${dst} (letter ${CC.letter(dst)}). ` +
+          (src === dst ? `Stays home on GPU ${dst}.` : (dst === node ? `Arrived home on GPU ${node}.` : `Currently on GPU ${node}, still to be sent.`));
       }
     } else {
       const reduce = model.key === "reduce-scatter" || model.key === "all-reduce";

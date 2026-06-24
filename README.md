@@ -60,6 +60,6 @@ To add a new collective, write a builder in `src/model.js` that returns the same
 - [x] All-Reduce (reduce-scatter + all-gather; cost `2·(N−1)/N·D`)
 - [x] Scatter
 - [x] Broadcast
-- [x] All-to-All
+- [x] All-to-All (bidirectional-ring / TPU torus, ⌊N/2⌋ steps)
 - [ ] Optional latency (α) term in the cost model
 - [ ] Tree / pipelined variants for broadcast & scatter

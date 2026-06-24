@@ -115,6 +115,9 @@ window.CC = window.CC || {};
     return mulberry32(key)() * 2 - 1; // [-1, 1]
   };
 
+  // Letter naming for all-to-all: A = destination GPU 0, B = GPU 1, …
+  CC.letter = function (i) { return String.fromCharCode(65 + i); };
+
   CC.blockMatrix = function (src, dst) {
     const m = [];
     for (let r = 0; r < CC.rows; r++) {

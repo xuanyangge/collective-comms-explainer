@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Indexing ops, visually — torch.gather / scatter</title>
+  <link rel="stylesheet" href="styles.css?v=5" />
+</head>
+<body>
+  <main class="wrap">
+    <header class="masthead">
+      <h1>Indexing ops, visually</h1>
+      <p class="sub">
+        How <code>torch.gather</code> and <code>torch.scatter</code> move elements —
+        the index redirects <strong>one</strong> axis while the other stays pinned
+        to its own position. Currently showing <strong id="current-op">gather (dim=1)</strong>.
+      </p>
+      <nav>
+        <a href="index.html">Collective comms</a>
+        <a href="gather.html" aria-current="page">Indexing (gather / scatter)</a>
+      </nav>
+    </header>
+
+    <section class="controls">
+      <div class="control">
+        <label for="gx-op">Operation</label>
+        <select id="gx-op" autocomplete="off">
+          <option value="gather" selected>gather</option>
+          <option value="scatter">scatter</option>
+        </select>
+      </div>
+
+      <div class="control">
+        <label for="gx-dim">dim</label>
+        <select id="gx-dim" autocomplete="off">
+          <option value="0">0 · index picks the row</option>
+          <option value="1" selected>1 · index picks the column</option>
+        </select>
+      </div>
+
+      <div class="control grow">
+        <label for="gx-step">Element: <span id="gx-step-val">0 / 6</span></label>
+        <input id="gx-step" type="range" min="0" max="6" step="1" value="0" />
+      </div>
+
+      <div class="control buttons">
+        <button id="gx-prev" type="button" title="Previous element">◀</button>
+        <button id="gx-play" type="button">▶ Play</button>
+        <button id="gx-next" type="button" title="Next element">▶</button>
+      </div>
+    </section>
+
+    <section class="stepinfo">
+      <h2 id="gx-step-title">Start</h2>
+      <p id="gx-step-desc">Scrub <strong>Element</strong> to walk through the mapping one cell at a time.</p>
+    </section>
+
+    <section id="gx-stage" class="stage">
+      <div id="gx-grids" class="gx-grids"></div>
+      <svg id="gx-overlay" class="overlay" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="gx-head" viewBox="0 0 10 10" refX="8" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d85a30" />
+          </marker>
+        </defs>
+        <line id="gx-line" class="gx-arrow" x1="0" y1="0" x2="0" y2="0"
+              marker-end="url(#gx-head)" style="display:none" />
+      </svg>
+    </section>
+
+    <p id="gx-note" class="op-note"></p>
+
+    <p class="hint">
+      Tip: switch <strong>dim</strong> and watch the arrow's geometry — at dim=1 it
+      stays inside a row, at dim=0 inside a column. <strong>Tap a filled output
+      cell</strong> to inspect where its value came from.
+    </p>
+
+    <section class="gx-example">
+      <h2 class="gx-ex-title">Where this shows up — cross-entropy loss</h2>
+      <p class="gx-ex-lead">
+        A language model emits <code>log_softmax</code> scores of shape <code>[T, V]</code> —
+        one distribution over the vocabulary at each position. The loss needs the
+        log-probability of the <em>gold</em> next token at every position. That is a
+        <strong>gather</strong> along the vocab axis (<code>dim=-1</code>): the target id
+        picks the column, the position (row) stays pinned — exactly the <code>dim=1</code>
+        picture above.
+      </p>
+
+      <div class="stage">
+        <div id="gx-ex-grids" class="gx-grids"></div>
+      </div>
+
+      <p class="gx-vocab">vocab&nbsp;&nbsp;0=the&nbsp;&nbsp;1=cat&nbsp;&nbsp;2=sat&nbsp;&nbsp;3=on&nbsp;&nbsp;4=mat&nbsp;&nbsp;·&nbsp;&nbsp;sequence “the cat sat on mat”</p>
+
+      <div class="gx-loss" id="gx-ex-loss"></div>
+
+      <pre class="gx-code"><code>logits   = model(tokens)                  # [T, V]
+logprobs = F.log_softmax(logits, dim=-1)  # [T, V]
+nll  = -logprobs.gather(-1, targets[:, None]).squeeze(-1)   # [T]
+loss = nll.mean()                         # scalar — this is what F.cross_entropy does</code></pre>
+
+      <h2 class="gx-ex-title">…and elsewhere in an LLM stack</h2>
+      <ul class="gx-uses">
+        <li><strong>scatter — Mixture-of-Experts routing.</strong> Dispatch each token's
+          hidden state into its chosen expert's buffer, then <code>scatter_add</code> the
+          expert outputs back to the original token positions.</li>
+        <li><strong>gather — beam search / KV-cache reorder.</strong> Each decode step,
+          reorder the cache by the surviving beam indices: <code>cache.gather(0, beam_idx)</code>.</li>
+        <li><strong>scatter — one-hot &amp; label smoothing.</strong> <code>scatter_</code> a
+          1.0 (or a smoothed value) into the target column to build soft labels.</li>
+        <li><strong>gather — top-k sampling / retrieval.</strong> Pull logits or embeddings
+          at selected indices (top-k decoding, RAG document gather).</li>
+      </ul>
+    </section>
+  </main>
+
+  <aside id="gx-inspector" class="inspector">
+    <div class="inspector-head">
+      <span id="gx-inspect-swatch" class="swatch"></span>
+      <h3 id="gx-inspect-title">Cell</h3>
+      <button id="gx-inspect-close" type="button" aria-label="Close">×</button>
+    </div>
+    <div id="gx-inspect-body"></div>
+    <p id="gx-inspect-note" class="inspect-note"></p>
+  </aside>
+
+  <script src="src/gather.js?v=6"></script>
+</body>
+</html>

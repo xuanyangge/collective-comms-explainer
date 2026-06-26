@@ -11,6 +11,15 @@ Implemented operations (switch via the Operation dropdown): **All-Gather**,
 **All-to-All**. They all share one collective-agnostic renderer — each algorithm
 is just a pure state machine in `src/model.js`.
 
+A second, standalone page — `gather.html` (linked from the masthead nav) —
+visualizes the **tensor-indexing** ops `torch.gather` and `torch.scatter`: how
+the `index` redirects exactly one axis (`dim`) while the other axis stays pinned
+to its own position. Scrub through the mapping one element at a time and watch
+the arrow stay inside a row (`dim=1`) or a column (`dim=0`). The page closes with
+a worked **cross-entropy loss** example — gathering each position's gold-token
+log-prob from the `[T, V]` `log_softmax` output — plus where gather/scatter show
+up elsewhere (MoE routing, beam-search KV-cache reorder, one-hot labels).
+
 ## Features
 
 - **Tunable ring size** — 2–8 GPUs.
@@ -44,6 +53,8 @@ It's plain HTML + SVG + JavaScript with **no build step**.
 | File            | Role |
 |-----------------|------|
 | `index.html`    | Layout: controls, stage, inspector, cost panel |
+| `gather.html`   | Standalone page for `torch.gather` / `torch.scatter` |
+| `src/gather.js` | Step machine + renderer for the indexing-ops page |
 | `styles.css`    | Styling + pop/fly animations |
 | `src/data.js`   | Global tensor → per-chunk submatrices, weights, colors |
 | `src/model.js`  | Collective algorithms as pure step-by-step state machines |
